@@ -12,7 +12,6 @@ import json
 from tqdm import tqdm
 
 class ImageAugmentor:
-    """Apply various transformations to images"""
     
     @staticmethod
     def adjust_brightness(image, factor):
@@ -84,7 +83,6 @@ class ImageAugmentor:
 
 
 class MIDIAugmentor:
-    """Apply various transformations to MIDI files"""
     
     @staticmethod
     def transpose(midi_path, semitones, output_path):
@@ -163,17 +161,10 @@ class DataAugmentationPipeline:
     """Complete data augmentation pipeline"""
     
     def __init__(self, original_pairs, output_dir, target_total=1000):
-        """
-        Args:
-            original_pairs: List of dicts with 'image_path' and 'midi_path'
-            output_dir: Directory to save augmented data
-            target_total: Target number of pairs to generate
-        """
         self.original_pairs = original_pairs
         self.output_dir = Path(output_dir)
         self.target_total = target_total
         
-        # Create output directories
         self.images_dir = self.output_dir / 'images'
         self.midi_dir = self.output_dir / 'midi'
         self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +174,6 @@ class DataAugmentationPipeline:
         self.midi_aug = MIDIAugmentor()
     
     def generate_augmentation_configs(self):
-        """Generate various augmentation configurations"""
         configs = []
         
         # Brightness variations

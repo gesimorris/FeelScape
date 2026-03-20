@@ -24,33 +24,29 @@ from midi_to_audio import convert_midi_to_wav
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 
-# Initialize FastAPI app
 app = FastAPI(
     title="Lofi Generator API",
     description="Generate lofi beats from images using AI",
     version="1.0.0"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Create necessary directories
-UPLOAD_DIR = Path("./uploads")
-OUTPUT_DIR = Path("./outputs")
-MODELS_DIR = Path("./models")
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "outputs"
+MODELS_DIR = BASE_DIR / "models"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
 
-
-# Global variables for model and scalers
 model = None
 scaler_x = None
 scaler_y = None
@@ -58,11 +54,9 @@ model_loaded = False
 
 
 def load_model_and_scalers():
-    """Load trained model and scalers"""
     global model, scaler_x, scaler_y, model_loaded
     
     try:
-        # Load model
         model_path = MODELS_DIR / "lofi_model.npy"
         if not model_path.exists():
             print("⚠️ Model file not found. Please train the model first.")
@@ -75,12 +69,11 @@ def load_model_and_scalers():
         )
         model.load_model(str(model_path))
         
-        # Load scalers
         scaler_x_path = MODELS_DIR / "scaler_x.npy"
         scaler_y_path = MODELS_DIR / "scaler_y.npy"
         
         if not scaler_x_path.exists() or not scaler_y_path.exists():
-            print("⚠️ Scaler files not found. Please train the model first.")
+            print("Scaler files not found. Please train the model first.")
             return False
         
         scaler_x_data = np.load(scaler_x_path, allow_pickle=True).item()
@@ -99,26 +92,23 @@ def load_model_and_scalers():
         scaler_y.n_features_in_ = len(scaler_y.min_)
         
         model_loaded = True
-        print("✅ Model and scalers loaded successfully!")
+        print("Model and scalers loaded successfully!")
         return True
     
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"Error loading model: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
-# Load model on startup
 @app.on_event("startup")
 async def startup_event():
-    """Load model when server starts"""
     load_model_and_scalers()
 
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {
         "message": "Lofi Generator API",
         "version": "1.0.0",
@@ -129,7 +119,6 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
         "model_loaded": model_loaded,
@@ -143,95 +132,50 @@ async def generate_music(
     duration: Optional[int] = 15,
     sa_iterations: Optional[int] = 3000
 ):
-    """
-    Generate lofi music from an uploaded image
-    
-    Args:
-        file: Uploaded image file
-        duration: Target duration in seconds (default: 15)
-        sa_iterations: Simulated annealing iterations (default: 3000)
-    
-    Returns:
-        JSON with MIDI file URL and metadata
-    """
     if not model_loaded:
-        raise HTTPException(
-            status_code=503,
-            detail="Model not loaded. Please train the model first."
-        )
+        raise HTTPException(status_code=503, detail="Model not loaded.")
     
-    # Validate file type
     if not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="File must be an image (JPEG, PNG, etc.)"
-        )
+        raise HTTPException(status_code=400, detail="File must be an image.")
     
-    # Generate unique ID for this request
     request_id = str(uuid.uuid4())
-    
+    image_path = UPLOAD_DIR / f"{request_id}.jpg"
+
     try:
-        # Save uploaded image
-        image_path = UPLOAD_DIR / f"{request_id}.jpg"
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        print(f"\n{'='*60}")
-        print(f"🎨 Processing image: {file.filename}")
-        print(f"Request ID: {request_id}")
-        print(f"{'='*60}")
-        
-        # Extract image features
-        print("\n📊 Extracting image features...")
         image_features = extract_image_features(str(image_path))
-        
         if image_features is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to extract features from image"
-            )
-        
-        print(f"Image features: {image_features}")
-        
-        # Scale features
-        image_features_2d = image_features.reshape(1, -1)
-        image_features_scaled = scaler_x.transform(image_features_2d)
-        
-        # Generate prediction
-        print("\n🤖 Running neural network prediction...")
+            raise Exception("Failed to extract features")
+
+        image_features_scaled = scaler_x.transform(image_features.reshape(1, -1))
         predicted_music = model.predict(image_features_scaled)
         
-        # Generate MIDI file
         midi_filename = OUTPUT_DIR / f"{request_id}.mid"
         success = generate_music_from_prediction(
-            predicted_music,
-            scaler_y,
-            str(midi_filename),
-            sa_iterations=sa_iterations,
-            target_duration=duration
+            predicted_music, scaler_y, str(midi_filename),
+            sa_iterations=sa_iterations, target_duration=duration
         )
         
         if not success:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to generate MIDI file"
-            )
-        
-        # Convert MIDI to MP3/WAV
+            raise Exception("MIDI generation failed")
+
         audio_filename = OUTPUT_DIR / f"{request_id}.wav"
-        print("\n🎵 Converting MIDI to audio...")
-        audio_success = convert_midi_to_wav(str(midi_filename), str(audio_filename))
+        audio_success = False
         
-        if not audio_success:
-            print("⚠️ Audio conversion failed, will provide MIDI only")
-        
-        # Clean up uploaded image
-        image_path.unlink()
-        
-        # Return response
-        print(f"\n{'='*60}")
-        print(f"✅ Successfully generated music!")
-        print(f"{'='*60}\n")
+        import shutil as system_shutil
+        if system_shutil.which("fluidsynth"):
+            try:
+                print("🎵 Converting MIDI to audio...")
+                audio_success = convert_midi_to_wav(str(midi_filename), str(audio_filename))
+            except Exception as e:
+                print(f"⚠️ Audio conversion failed: {e}")
+        else:
+            print("⚠️ Fluidsynth not found on server. Skipping WAV conversion.")
+
+        if image_path.exists():
+            image_path.unlink()
         
         response_data = {
             "success": True,
@@ -239,44 +183,25 @@ async def generate_music(
             "midi_url": f"/outputs/{request_id}.mid",
             "filename": f"{request_id}.mid",
             "duration": duration,
+            "audio_available": audio_success,
             "timestamp": datetime.now().isoformat()
         }
         
-        # Add audio URL if conversion succeeded
         if audio_success:
             response_data["audio_url"] = f"/outputs/{request_id}.wav"
             response_data["audio_filename"] = f"{request_id}.wav"
         
         return JSONResponse(response_data)
     
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"❌ Error processing request: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Clean up files
         if image_path.exists():
             image_path.unlink()
-        
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        print(f"❌ Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/download/{request_id}")
 async def download_midi(request_id: str):
-    """
-    Download generated MIDI file
-    
-    Args:
-        request_id: Request ID from generation
-    
-    Returns:
-        MIDI file download
-    """
     midi_path = OUTPUT_DIR / f"{request_id}.mid"
     
     if not midi_path.exists():
@@ -294,15 +219,6 @@ async def download_midi(request_id: str):
 
 @app.delete("/api/cleanup/{request_id}")
 async def cleanup_files(request_id: str):
-    """
-    Clean up generated files
-    
-    Args:
-        request_id: Request ID from generation
-    
-    Returns:
-        Success status
-    """
     midi_path = OUTPUT_DIR / f"{request_id}.mid"
     
     deleted = False
@@ -319,12 +235,6 @@ async def cleanup_files(request_id: str):
 
 @app.post("/api/reload-model")
 async def reload_model():
-    """
-    Reload model and scalers (useful after retraining)
-    
-    Returns:
-        Success status
-    """
     success = load_model_and_scalers()
     
     if success:
@@ -340,14 +250,13 @@ async def reload_model():
         )
 
 
-# Mount static files AFTER all route definitions
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 
 if __name__ == "__main__":
     print("""
     ╔═══════════════════════════════════════════════════════════╗
-    ║           🎵 LOFI GENERATOR API SERVER 🎵                 ║
+    ║            LOFI GENERATOR API SERVER                  ║
     ╚═══════════════════════════════════════════════════════════╝
     
     Starting server on http://localhost:8000

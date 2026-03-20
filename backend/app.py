@@ -1,8 +1,3 @@
-"""
-FastAPI Backend for Lofi Generator
-Handles image uploads, MIDI generation, and file downloads
-"""
-
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,10 +18,8 @@ from midi_generation import generate_music_from_prediction
 from midi_to_audio import convert_midi_to_wav
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-
 app = FastAPI(
     title="Lofi Generator API",
-    description="Generate lofi beats from images using AI",
     version="1.0.0"
 )
 
@@ -43,23 +36,24 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 MODELS_DIR = BASE_DIR / "models"
 
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-MODELS_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+MODELS_DIR.mkdir(exist_ok=True, parents=True)
 
 model = None
 scaler_x = None
 scaler_y = None
 model_loaded = False
 
-
 def load_model_and_scalers():
     global model, scaler_x, scaler_y, model_loaded
-    
     try:
         model_path = MODELS_DIR / "lofi_model.npy"
+        scaler_x_path = MODELS_DIR / "scaler_x.npy"
+        scaler_y_path = MODELS_DIR / "scaler_y.npy"
+
         if not model_path.exists():
-            print("⚠️ Model file not found. Please train the model first.")
+            print(f"File not found: {model_path}")
             return False
         
         model = ImprovedNeuralNetwork(
@@ -69,11 +63,7 @@ def load_model_and_scalers():
         )
         model.load_model(str(model_path))
         
-        scaler_x_path = MODELS_DIR / "scaler_x.npy"
-        scaler_y_path = MODELS_DIR / "scaler_y.npy"
-        
         if not scaler_x_path.exists() or not scaler_y_path.exists():
-            print("Scaler files not found. Please train the model first.")
             return False
         
         scaler_x_data = np.load(scaler_x_path, allow_pickle=True).item()
@@ -92,39 +82,30 @@ def load_model_and_scalers():
         scaler_y.n_features_in_ = len(scaler_y.min_)
         
         model_loaded = True
-        print("Model and scalers loaded successfully!")
+        print("Success: Loaded")
         return True
-    
     except Exception as e:
-        print(f"Error loading model: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error: {e}")
         return False
-
 
 @app.on_event("startup")
 async def startup_event():
     load_model_and_scalers()
 
-
 @app.get("/")
 async def root():
+    return {"status": "online", "model_loaded": model_loaded, "dir": str(BASE_DIR)}
+
+@app.get("/api/debug-files")
+async def debug_files():
+    files = [f.name for f in MODELS_DIR.iterdir()] if MODELS_DIR.exists() else []
     return {
-        "message": "Lofi Generator API",
-        "version": "1.0.0",
-        "status": "running",
-        "model_loaded": model_loaded
+        "cwd": os.getcwd(),
+        "base": str(BASE_DIR),
+        "models_exist": MODELS_DIR.exists(),
+        "files": files,
+        "loaded": model_loaded
     }
-
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "model_loaded": model_loaded,
-        "timestamp": datetime.now().isoformat()
-    }
-
 
 @app.post("/api/generate")
 async def generate_music(
@@ -136,7 +117,7 @@ async def generate_music(
         raise HTTPException(status_code=503, detail="Model not loaded.")
     
     if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image.")
+        raise HTTPException(status_code=400, detail="Not an image.")
     
     request_id = str(uuid.uuid4())
     image_path = UPLOAD_DIR / f"{request_id}.jpg"
@@ -147,7 +128,7 @@ async def generate_music(
         
         image_features = extract_image_features(str(image_path))
         if image_features is None:
-            raise Exception("Failed to extract features")
+            raise Exception("Feature extraction failed")
 
         image_features_scaled = scaler_x.transform(image_features.reshape(1, -1))
         predicted_music = model.predict(image_features_scaled)
@@ -159,115 +140,49 @@ async def generate_music(
         )
         
         if not success:
-            raise Exception("MIDI generation failed")
+            raise Exception("MIDI failed")
 
         audio_filename = OUTPUT_DIR / f"{request_id}.wav"
         audio_success = False
         
-        import shutil as system_shutil
-        if system_shutil.which("fluidsynth"):
+        if shutil.which("fluidsynth"):
             try:
-                print("🎵 Converting MIDI to audio...")
                 audio_success = convert_midi_to_wav(str(midi_filename), str(audio_filename))
-            except Exception as e:
-                print(f"⚠️ Audio conversion failed: {e}")
-        else:
-            print("⚠️ Fluidsynth not found on server. Skipping WAV conversion.")
+            except:
+                pass
 
         if image_path.exists():
             image_path.unlink()
         
-        response_data = {
+        res = {
             "success": True,
             "request_id": request_id,
             "midi_url": f"/outputs/{request_id}.mid",
-            "filename": f"{request_id}.mid",
-            "duration": duration,
-            "audio_available": audio_success,
-            "timestamp": datetime.now().isoformat()
+            "audio_available": audio_success
         }
-        
         if audio_success:
-            response_data["audio_url"] = f"/outputs/{request_id}.wav"
-            response_data["audio_filename"] = f"{request_id}.wav"
-        
-        return JSONResponse(response_data)
-    
+            res["audio_url"] = f"/outputs/{request_id}.wav"
+        return res
     except Exception as e:
         if image_path.exists():
             image_path.unlink()
-        print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/api/download/{request_id}")
 async def download_midi(request_id: str):
-    midi_path = OUTPUT_DIR / f"{request_id}.mid"
-    
-    if not midi_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="MIDI file not found"
-        )
-    
-    return FileResponse(
-        path=str(midi_path),
-        media_type="audio/midi",
-        filename=f"lofi_{request_id}.mid"
-    )
-
-
-@app.delete("/api/cleanup/{request_id}")
-async def cleanup_files(request_id: str):
-    midi_path = OUTPUT_DIR / f"{request_id}.mid"
-    
-    deleted = False
-    if midi_path.exists():
-        midi_path.unlink()
-        deleted = True
-    
-    return {
-        "success": True,
-        "deleted": deleted,
-        "request_id": request_id
-    }
-
+    path = OUTPUT_DIR / f"{request_id}.mid"
+    if not path.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(path=str(path), media_type="audio/midi", filename=f"{request_id}.mid")
 
 @app.post("/api/reload-model")
 async def reload_model():
-    success = load_model_and_scalers()
-    
-    if success:
-        return {
-            "success": True,
-            "message": "Model reloaded successfully",
-            "model_loaded": model_loaded
-        }
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to reload model"
-        )
-
+    if load_model_and_scalers():
+        return {"success": True}
+    raise HTTPException(status_code=500)
 
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
-
 if __name__ == "__main__":
-    print("""
-    ╔═══════════════════════════════════════════════════════════╗
-    ║            LOFI GENERATOR API SERVER                  ║
-    ╚═══════════════════════════════════════════════════════════╝
-    
-    Starting server on http://localhost:8000
-    
-    API Endpoints:
-    - POST /api/generate       : Generate music from image
-    - GET  /api/download/{id}  : Download generated MIDI
-    - GET  /health            : Health check
-    - POST /api/reload-model   : Reload trained model
-    
-    Documentation: http://localhost:8000/docs
-    """)
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

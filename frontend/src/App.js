@@ -14,7 +14,7 @@ import './App.css';
 
 
 const API_BASE = process.env.NODE_ENV === 'production' 
-  ? 'https://your-lofi-backend.onrender.com'
+  ? 'https://feelscape.onrender.com'
   : 'http://localhost:8000';
 
 function App() {

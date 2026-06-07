@@ -39,7 +39,6 @@ yarn-error.log*
 /frontend/.env.production.local
 
 # Model files (too large for git)
-backend/models/*.npy
 backend/augmented_data/
 
 # Upload and output directories

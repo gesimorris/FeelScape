@@ -44,7 +44,7 @@ npm install && npm start
 
 ## Sample Output
 
-🎵 [Download / Play MP3]([demofeelscape.mp3](https://github.com/user-attachments/files/28896103/demofeelscape.mp3))
+🎵 [Download / Play MP3](https://github.com/user-attachments/files/28896103/demofeelscape.mp3)
 
 ## Future Improvements
 
